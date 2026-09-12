@@ -1,0 +1,16 @@
+[package]
+name = "wappsw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+regex = "1.13.1"
+rustmigemo = { git = "https://github.com/oguna/rustmigemo", rev = "121101dfcfd9465c998ba53fabe43773b14bf868", version = "0.1.7-dev.0" }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Security", "Win32_UI_Input_Ime", "Win32_UI_Accessibility"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
