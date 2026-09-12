@@ -159,7 +159,8 @@ therefore backspace too. `scripts\quit.bat` was deleted in the same commit
 (`scripts\` is now empty and gone), and the README's 終了方法 section documents
 `Ctrl+Q` plus Task Manager as the last resort.
 
-**Verified on hardware**, not just compiled: a harness injects keystrokes with
+**Verified on hardware**, not just compiled:
+[tests/popup-keyboard.ps1](tests/popup-keyboard.ps1) injects keystrokes with
 `keybd_event` against the release build and reads the search box back with a
 cross-process `WM_GETTEXT`. `Ctrl+Q` exits the process with code 0 — a clean
 message-loop exit, not a kill — and CapsLock toggles normally again afterwards,
@@ -171,9 +172,8 @@ fails when backspace is broken, rather than passing vacuously.
 
 **Lesson worth keeping.** The backspace regression shipped because the first
 round of verification only watched the *process* — does the popup appear, does
-the app exit — and never read the edit control's contents. 📝 E1's argument
-extends here: the keyboard surface needs a check that asserts on text, not just
-on liveness.
+the app exit — and never read the edit control's contents. The harness is now
+checked in for exactly that reason; see 📝 E1.
 
 **Still outstanding:** 📝 E4 (`--quit`). Quitting now requires a working hotkey;
 if the hotkey is misconfigured, Task Manager is the only way out. E4 is the
@@ -352,6 +352,31 @@ five modifiers has more cases than anyone checks by hand.
 
 Strongly suggest this lands **before** item 2 rather than after. **Effort.** S
 to start, and cheap thereafter.
+
+**First piece landed:** [tests/popup-keyboard.ps1](tests/popup-keyboard.ps1),
+an end-to-end keyboard test written after item 1 shipped a backspace
+regression. It drives a real `wappsw.exe` with `keybd_event` and reads the
+search box back with a cross-process `WM_GETTEXT`, so it asserts on the edit
+control's *contents* rather than on the process merely still being alive —
+which is the distinction the regression slipped through. It exits non-zero on
+failure, and was checked against a deliberately broken build to confirm it
+fails when it should rather than passing vacuously.
+
+It is **not** wired into `cargo test`, deliberately: it needs an interactive
+desktop, installs a global low-level hook, injects system-wide input and stops
+any running `wappsw.exe`. Run it by hand:
+
+```text
+powershell -ExecutionPolicy Bypass -File tests\popup-keyboard.ps1 -Build
+```
+
+It reads the real `%APPDATA%\wappsw\config.ini` to learn which hotkey to
+press, so it works whatever `hotkey=` is set to — and it will keep working as
+item 2 grows the key table, which is the other half of why it is worth having
+before item 2 rather than after. The pure-function unit tests this entry
+originally asked for (`key_name_to_vk`, `load`'s INI parsing, `order_by_mru`,
+`default_selected`) are still unwritten and still wanted; this harness covers
+the integration end, not that one.
 
 ### 📝 E2 — `log=` in config.ini, with the command line overriding
 
