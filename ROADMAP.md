@@ -370,15 +370,44 @@ re-init logging after `load()` and have `load()` return its diagnostics rather
 than writing them directly. The second is cleaner and makes `load()` testable,
 which 📝 E1 wants anyway. **Effort.** S-M.
 
-### 📝 E3 — CI and published builds
+### 📝 E3 — CI, and automating the manual `/dist` packaging
 
-No `.github/` at all. Now that the tree builds on both `i686` and `x86_64`
-(commit `96e98d4`), a GitHub Actions workflow running `cargo build --release`
-for both targets would stop that 64-bit-only break from recurring silently —
-note its 64-bit half is *still unverified*, since only the `i686` toolchain is
-installed on this machine — and would produce release artifacts so users do not
-need a Rust toolchain. Publishing needs its own pass: artifact naming, which
-targets are official, and whether releases are tagged by hand. **Effort.** M.
+Two halves, and the second is the reason the first is worth doing.
+
+**CI.** No `.github/` at all. Now that the tree builds on both `i686` and
+`x86_64` (commit `96e98d4`), a GitHub Actions workflow running
+`cargo build --release` for both targets would stop that 64-bit-only break from
+recurring silently — note its 64-bit half is *still unverified*, since only the
+`i686` toolchain is installed on this machine. Once 📝 E1 exists, the same
+workflow runs `cargo test`.
+
+**Packaging.** Releases are currently assembled by hand into `/dist`, which is
+gitignored (`9d7b204`). Nothing in the repo describes that process — there is
+no packaging script under `scripts\` or `setup\`, so the archive's contents,
+layout and naming live only on your machine. That is the part CI should
+*replace* rather than sit beside: a release workflow that builds both targets
+and produces the archive means the recipe becomes reviewable, reproducible by
+anyone, and impossible to get subtly wrong at 1am.
+
+The migration is mechanical but needs your knowledge first, since none of it
+can be read off the repo:
+
+- **What goes in the archive.** `wappsw.exe` obviously; presumably also
+  `README.md`, `LICENSE`, and the `assets\LICENSE*` files, which are a
+  redistribution requirement for the BSD-licensed Migemo dictionary rather than
+  a nicety. `setup\install-task.ps1` is useful to ship. `scripts\quit.bat` is
+  being deleted in item 1.
+- **Naming and layout.** Per-target names (`wappsw-0.1.0-i686.zip` /
+  `-x86_64.zip`), and whether the archive has a top-level folder.
+- **Which targets are official.** Both, or 32-bit only — a single `i686` binary
+  runs on 64-bit Windows through WOW64 and halves the release matrix, at the
+  cost of a WOW64 process talking to 64-bit windows.
+- **Trigger.** Tag-driven (`v0.1.0` pushes a GitHub Release) versus manual
+  dispatch. Tag-driven is the point of the exercise.
+
+Worth writing the current manual steps down first, even informally — that
+document *is* the workflow, and it has value on its own if CI slips.
+**Effort.** M, once the packaging recipe is written down.
 
 ### 📝 E4 — `wappsw.exe --quit`
 
