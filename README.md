@@ -3,11 +3,15 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Topics](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fpanzoux%2Fwappsw&label=topics&query=%24.topics&color=blue)
 
-Windows 11向けの軽量タスクスイッチャーです。RustとWin32/GDIのみで構築したシンプルな構造で、GUIフレームワークやトレイアイコン、コンソールウィンドウは使用していません。
+Windows 10 / Windows 11 向けの軽量タスクスイッチャーです。RustとWin32/GDIのみで構築したシンプルな構造で、GUIフレームワークやトレイアイコン、コンソールウィンドウは使用していません。
 
 Migemo機能と辞書データ（BSDライセンス）をアプリ本体に内蔵しているため、外部ファイルを用意することなく単体で快適なローマ字検索が可能です。
 
 [ytakanashi/Tascher](https://github.com/ytakanashi/Tascher) に大きな影響を受けて開発しました。Windows 11でWindows Terminal (`wt.exe`) などのウィンドウ名が「ShellHost」とならないようにするなど、OSの仕様変化に合わせたタスク名表示にしています。
+
+## 動作環境
+
+Windows 10 / Windows 11 で動作します（32bit・64bit のどちらでもビルドできます）。
 
 ## 主な機能
 
@@ -15,7 +19,7 @@ Migemo機能と辞書データ（BSDライセンス）をアプリ本体に内�
 * **Migemoと辞書内蔵・ローマ字曖昧検索**: キーボードから英字を入力するだけで、Migemo（[rustmigemo](https://github.com/oguna/rustmigemo)）による日本語タイトルの曖昧検索が可能です（日本語を入力しなくても、通常の部分一致として動作します）。
 * **キーボード操作**: `↑` / `↓` で選択、`Enter` で切り替え、`Esc` でキャンセルできます。
 * **素早い2ウィンドウ切り替え**: 直前までフォーカスしていた順（MRU順）に並ぶため、ホットキーを2回連打するだけで直近の2つのウィンドウを交互に行き来できます。
-* **Windows 11向けの名称・アイコン解決**: UWPアプリは `ApplicationFrameHost.exe` の子プロセスである `CoreWindow` から実プロセスを追跡して取得し、その他のアプリ（Windows Terminal等）も分かりやすい名称を取得して表示します。
+* **Windows 10 / 11 での名称・アイコン解決**: UWPアプリは `ApplicationFrameHost.exe` の子プロセスである `CoreWindow` から実プロセスを追跡して取得し、その他のアプリ（Windows Terminal等）も分かりやすい名称を取得して表示します。
 
 ## 使い方
 
