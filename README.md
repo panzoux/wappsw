@@ -1,5 +1,8 @@
 # wappsw
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Topics](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fpanzoux%2Fwappsw&label=topics&query=%24.topics&color=blue)
+
 Windows 11向けの軽量タスクスイッチャーです。RustとWin32/GDIのみで構築したシンプルな構造で、GUIフレームワークやトレイアイコン、コンソールウィンドウは使用していません。
 
 Migemo機能と辞書データ（BSDライセンス）をアプリ本体に内蔵しているため、外部ファイルを用意することなく単体で快適なローマ字検索が可能です。
