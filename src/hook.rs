@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
@@ -47,19 +49,10 @@ fn is_down(vk: u16) -> bool {
     unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 }
 }
 
-/// v1 only fires on a *bare* press of the configured key -- if Ctrl/Alt/Win
-/// is held, this is presumably part of some other shortcut and must pass
-/// through untouched rather than being swallowed.
-///
-/// Shift is deliberately excluded: on JIS-style keyboard layouts (where the
-/// Caps Lock key doubles as the Eisu/alphanumeric key and only becomes Caps
-/// Lock via a "Shift Generates Caps" translation at the driver level),
-/// Windows reports VK_SHIFT as held via GetAsyncKeyState for *every* Caps
-/// Lock press regardless of whether Shift is physically down -- confirmed by
-/// diagnostic logging showing shift=true on 100% of real hardware presses.
-/// Treating that as a real modifier made every bare press look like an
-/// accelerator combo and silently blocked the hotkey entirely.
-fn any_modifier_held() -> bool {
+/// If Ctrl/Alt/Win is held, this is presumably part of some other shortcut
+/// and must pass through untouched -- neither triggering the hotkey nor
+/// being swallowed.
+fn other_modifier_held() -> bool {
     is_down(VK_CONTROL) || is_down(VK_MENU) || is_down(VK_LWIN) || is_down(VK_RWIN)
 }
 
@@ -72,28 +65,30 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         } else {
             kb.vkCode == TARGET_VK.load(Ordering::SeqCst)
         };
-        if is_target {
-            let blocked = any_modifier_held();
+        if is_target && !other_modifier_held() {
+            // Shift+this-key still triggers (see is_target: on JIS-style
+            // layouts the physical key only reaches this hook as VK_CAPITAL
+            // when Shift is held, so excluding Shift here would silently
+            // drop that case rather than just this key's own toggle). It's
+            // swallowed the same as a bare press rather than passed
+            // through: letting it through toggles the real Caps Lock
+            // lock-state on every other switch, which is worse than losing
+            // whatever else Shift+CapsLock might otherwise have done.
+            let shift = is_down(VK_SHIFT);
             crate::log::log(&format!(
-                "hook: target key event msg={:#x} vk={:#x} scan={:#x} flags={:#x} ctrl={} alt={} lwin={} rwin={} -> {}",
+                "hook: target key event msg={:#x} vk={:#x} scan={:#x} flags={:#x} shift={} -> SWALLOWED",
                 wparam,
                 kb.vkCode,
                 kb.scanCode,
                 kb.flags,
-                is_down(VK_CONTROL),
-                is_down(VK_MENU),
-                is_down(VK_LWIN),
-                is_down(VK_RWIN),
-                if blocked { "PASSED THROUGH (modifier held)" } else { "SWALLOWED (bare press)" }
+                shift,
             ));
-            if !blocked {
-                let msg = wparam as u32;
-                if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                    popup::on_hotkey();
-                }
-                // Swallow both down and up: never call CallNextHookEx for this key.
-                return 1;
+            let msg = wparam as u32;
+            if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+                popup::on_hotkey();
             }
+            // Swallow both down and up: never call CallNextHookEx for this key.
+            return 1;
         }
     }
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }

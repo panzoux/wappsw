@@ -3,9 +3,6 @@ use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-use windows_sys::Win32::Storage::FileSystem::{
-    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
-};
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -210,84 +207,11 @@ unsafe extern "system" fn find_core_window_proc(hwnd: HWND, lparam: LPARAM) -> i
     1
 }
 
-/// Reads `FileDescription` from the exe's version resource; falls back to the
-/// raw exe filename if the resource or field is missing.
+/// The exe's own filename (e.g. "chrome.exe") rather than a resource-derived
+/// display name (e.g. FileDescription): the window title usually already
+/// carries the human-readable app name, so pairing it with the module's
+/// literal filename is a more predictable, always-present secondary label
+/// than a version resource that not every exe even has.
 fn friendly_app_name(exe_path: &str) -> String {
-    file_description(exe_path).unwrap_or_else(|| exe_path_file_name(exe_path).to_string())
-}
-
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn file_description(exe_path: &str) -> Option<String> {
-    let wide_path = to_wide(exe_path);
-    let mut handle: u32 = 0;
-    let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), &mut handle) };
-    if size == 0 {
-        return None;
-    }
-
-    let mut data = vec![0u8; size as usize];
-    let ok = unsafe {
-        GetFileVersionInfoW(
-            wide_path.as_ptr(),
-            0,
-            size,
-            data.as_mut_ptr() as *mut c_void,
-        )
-    };
-    if ok == 0 {
-        return None;
-    }
-
-    // \VarFileInfo\Translation gives the language/codepage pairs actually
-    // present in this exe's resources.
-    let translation_key = to_wide("\\VarFileInfo\\Translation");
-    let mut trans_ptr: *mut c_void = null_mut();
-    let mut trans_len: u32 = 0;
-    let ok = unsafe {
-        VerQueryValueW(
-            data.as_ptr() as *const c_void,
-            translation_key.as_ptr(),
-            &mut trans_ptr,
-            &mut trans_len,
-        )
-    };
-    if ok == 0 || trans_ptr.is_null() || trans_len < 4 {
-        return None;
-    }
-
-    let pairs = unsafe {
-        std::slice::from_raw_parts(trans_ptr as *const u16, (trans_len / 2) as usize)
-    };
-    // Each pair is [langId: u16, codePage: u16].
-    for chunk in pairs.chunks_exact(2) {
-        let lang = chunk[0];
-        let codepage = chunk[1];
-        let key = to_wide(&format!(
-            "\\StringFileInfo\\{:04x}{:04x}\\FileDescription",
-            lang, codepage
-        ));
-        let mut val_ptr: *mut c_void = null_mut();
-        let mut val_len: u32 = 0;
-        let ok = unsafe {
-            VerQueryValueW(
-                data.as_ptr() as *const c_void,
-                key.as_ptr(),
-                &mut val_ptr,
-                &mut val_len,
-            )
-        };
-        if ok != 0 && !val_ptr.is_null() && val_len > 0 {
-            let chars =
-                unsafe { std::slice::from_raw_parts(val_ptr as *const u16, val_len as usize) };
-            let end = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-            let desc = String::from_utf16_lossy(&chars[..end]);
-            if !desc.trim().is_empty() {
-                return Some(desc);
-            }
-        }
-    }
-    None
+    exe_path_file_name(exe_path).to_string()
 }

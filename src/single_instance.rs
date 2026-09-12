@@ -26,7 +26,7 @@ pub fn acquire_or_show_error() -> Option<HANDLE> {
 }
 
 fn show_conflict_error() {
-    let text = to_wide("wappsw is already running.\n\nOnly one instance can hold the configured hotkey at a time.");
+    let text = to_wide("wappsw is already running.");
     let caption = to_wide("wappsw");
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR);
