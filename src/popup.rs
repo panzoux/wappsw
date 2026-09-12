@@ -10,7 +10,9 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::Ime::ImmAssociateContext;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, SetFocus, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_Q, VK_RETURN, VK_UP,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DrawIconEx, GetClientRect,
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, KillTimer,
@@ -479,9 +481,12 @@ fn paint(h: HWND) {
     }
 }
 
-/// Special keys (Up/Down/Enter/Escape) must control the list even while the
-/// edit control has keyboard focus, so they're intercepted here before
+/// Special keys (Up/Down/Enter/Escape/Ctrl+Q) must control the list even while
+/// the edit control has keyboard focus, so they're intercepted here before
 /// falling through to the edit control's own WndProc for normal typing.
+/// These keys are the app's own and deliberately not configurable -- only the
+/// hotkey is, because only the hotkey has to coexist with whatever else the
+/// machine already uses.
 unsafe extern "system" fn edit_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_KEYDOWN {
         match wparam as u16 {
@@ -501,14 +506,30 @@ unsafe extern "system" fn edit_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARA
                 move_selection(1);
                 return 0;
             }
+            // Ctrl+Q quits the whole app. hide() first so the popup is gone
+            // before the message loop unwinds; PostQuitMessage makes
+            // GetMessageW in main() return 0, so both hooks are uninstalled
+            // and the single-instance mutex is released on the way out --
+            // which `taskkill /F` never did.
+            VK_Q if unsafe { GetKeyState(VK_CONTROL as i32) } as u16 & 0x8000 != 0 => {
+                hide();
+                unsafe { PostQuitMessage(0) };
+                return 0;
+            }
             _ => {}
         }
     }
-    // TranslateMessage() still turns Enter/Escape's WM_KEYDOWN into a
-    // trailing WM_CHAR('\r'/ESC) regardless of what we did with the
-    // keydown above. A plain single-line edit control beeps on receiving
-    // those as characters to insert, so swallow them here too.
-    if msg == WM_CHAR && matches!(wparam as u8, 0x0D | 0x1B) {
+    // TranslateMessage() still turns Enter/Escape/Ctrl+<letter> WM_KEYDOWNs
+    // into a trailing WM_CHAR regardless of what we did with the keydown
+    // above, and a plain single-line edit control beeps on every control
+    // character it cannot insert -- so swallow the C0 range here.
+    //
+    // Backspace (0x08) is the one exception and must NOT be swallowed: it is
+    // the single control character a single-line EDIT does implement, and
+    // eating it leaves the search box uncorrectable. Ctrl+H arrives as the
+    // same 0x08 and is therefore backspace too, which is the readline
+    // behaviour roadmap item C5 wants anyway.
+    if msg == WM_CHAR && matches!(wparam as u8, 0x01..=0x07 | 0x09..=0x1B) {
         return 0;
     }
     let old = ORIGINAL_EDIT_PROC.load(Ordering::SeqCst);

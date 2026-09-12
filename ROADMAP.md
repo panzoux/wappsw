@@ -25,44 +25,6 @@ used in this document only as a reading aid, never as a config value.
 
 ---
 
-## ✅ 1. `Ctrl+Q` quits the app while the list is showing
-
-**Decided:** quits immediately, no confirmation. Not configurable — `Ctrl+Q`
-is the app's own key, in the same class as `Up`/`Down`/`Esc`, which are not
-configurable either. The hotkey is configurable because it must coexist with
-whatever else the machine uses; keys *inside* the popup are the app's to own.
-`scripts\quit.bat` is deleted as part of this change.
-
-**Where.** [popup.rs:485](src/popup.rs:485) `edit_subclass_proc`, alongside the
-existing `Esc` / `Enter` / `Up` / `Down` arms.
-
-**Shape.**
-
-- On `WM_KEYDOWN` with `wparam == 'Q'` and `GetKeyState(VK_CONTROL) & 0x8000`:
-  `hide()`, then `PostQuitMessage(0)`. `GetMessageW` at
-  [main.rs:42](src/main.rs:42) returns 0, the loop breaks, both hooks
-  uninstall, the mutex is released on exit. No new teardown path needed — this
-  is strictly better than `taskkill /F`, which skips
-  `hook::uninstall` / `mru::uninstall` at [main.rs:52](src/main.rs:52)
-  entirely.
-- Swallow the trailing `WM_CHAR`. `Ctrl+Q` produces `WM_CHAR 0x11` and a
-  single-line `EDIT` beeps at control characters it cannot insert — the same
-  reason `0x0D` / `0x1B` are already swallowed at
-  [popup.rs:511](src/popup.rs:511). Widen that test to the whole `0x01..=0x1A`
-  range rather than adding `0x11` alone; 📝 C5 will need the rest of it anyway.
-- Delete `scripts\quit.bat` **in the same commit**, not before. Until `Ctrl+Q`
-  exists it is the only quit path.
-
-**One consequence worth accepting deliberately.** After this, quitting requires
-a working hotkey: open the popup, press `Ctrl+Q`. If the hotkey is
-misconfigured or its scan code is wrong on a given keyboard, the only way out
-is Task Manager. 📝 E4 (`--quit` flag) is the proper fallback, and the two are
-worth doing close together.
-
-**Effort.** S.
-
----
-
 ## ✅ 2. More keys in `config.ini`, including modifier combos
 
 **Decided:** modifier combos are wanted. Several hotkeys bound at once is
@@ -179,6 +141,43 @@ than having it simply ignored.
 ---
 
 ## ✔️ Done
+
+### ✔️ Item 1 — `Ctrl+Q` quits the app while the list is showing
+
+Implemented as decided: quits immediately, no confirmation, not configurable.
+[popup.rs](src/popup.rs) `edit_subclass_proc` gained a `VK_Q` arm guarded on
+`GetKeyState(VK_CONTROL)`, which calls `hide()` then `PostQuitMessage(0)`;
+`GetMessageW` at [main.rs:42](src/main.rs:42) returns 0, the loop breaks, and
+both hooks uninstall at [main.rs:52](src/main.rs:52) — which `taskkill /F`
+never did. The `WM_CHAR` swallow was widened from `0x0D | 0x1B` to
+`0x01..=0x07 | 0x09..=0x1B` so `Ctrl+<letter>` does not make the edit control
+beep; 📝 C5 inherits that. **Backspace (`0x08`) is deliberately excluded**
+— it is the one control character a single-line `EDIT` implements, and the
+first cut of this change swallowed the whole `0x01..=0x1B` range, which broke
+backspace in the search box. `Ctrl+H` arrives as the same `0x08` and is
+therefore backspace too. `scripts\quit.bat` was deleted in the same commit
+(`scripts\` is now empty and gone), and the README's 終了方法 section documents
+`Ctrl+Q` plus Task Manager as the last resort.
+
+**Verified on hardware**, not just compiled: a harness injects keystrokes with
+`keybd_event` against the release build and reads the search box back with a
+cross-process `WM_GETTEXT`. `Ctrl+Q` exits the process with code 0 — a clean
+message-loop exit, not a kill — and CapsLock toggles normally again afterwards,
+proving the low-level hook really was uninstalled. Bare `Q` types into the box
+without quitting, `Esc` only hides, backspace deletes (including on an empty
+box, and after a `Ctrl` chord), and `Ctrl+Z` / `Ctrl+K` / `Tab` insert nothing.
+The harness was checked against a deliberately reverted build to confirm it
+fails when backspace is broken, rather than passing vacuously.
+
+**Lesson worth keeping.** The backspace regression shipped because the first
+round of verification only watched the *process* — does the popup appear, does
+the app exit — and never read the edit control's contents. 📝 E1's argument
+extends here: the keyboard surface needs a check that asserts on text, not just
+on liveness.
+
+**Still outstanding:** 📝 E4 (`--quit`). Quitting now requires a working hotkey;
+if the hotkey is misconfigured, Task Manager is the only way out. E4 is the
+proper fallback and should follow soon.
 
 ### ✔️ E5 — README said Windows 11 only
 
@@ -323,7 +322,9 @@ Rebinding it to "start of line" is the bash/emacs convention but breaks a
 Windows one — worth being deliberate about, since the popup is otherwise a
 normal Windows text field. No conflict with `Ctrl+Q` from item 1.
 
-Implementation shares the control-character swallowing widened in item 1.
+The control-character swallowing this needs already landed with item 1 —
+`WM_CHAR` in `0x01..=0x1B` is swallowed, so these keys can be handled on
+`WM_KEYDOWN` without the edit control beeping.
 **Effort.** S-M depending on how many keys.
 
 ### 📝 D3 — match counter in the empty strip at the bottom
@@ -395,8 +396,8 @@ can be read off the repo:
 - **What goes in the archive.** `wappsw.exe` obviously; presumably also
   `README.md`, `LICENSE`, and the `assets\LICENSE*` files, which are a
   redistribution requirement for the BSD-licensed Migemo dictionary rather than
-  a nicety. `setup\install-task.ps1` is useful to ship. `scripts\quit.bat` is
-  being deleted in item 1.
+  a nicety. `setup\install-task.ps1` is useful to ship. `scripts\quit.bat` no
+  longer exists — deleted with item 1.
 - **Naming and layout.** Per-target names (`wappsw-0.1.0-i686.zip` /
   `-x86_64.zip`), and whether the archive has a top-level folder.
 - **Which targets are official.** Both, or 32-bit only — a single `i686` binary
@@ -447,8 +448,8 @@ itself is the thing that is broken. Pairs with item 1; worth doing soon after.
 
 ## Suggested order
 
-1. ✅ **Item 1** (`Ctrl+Q`) together with 📝 **E4** (`--quit`) — self-contained,
-   and E4 covers the fallback that removing `quit.bat` takes away.
+1. ✔️ **Item 1** (`Ctrl+Q`) — done. 📝 **E4** (`--quit`) is the other half and is
+   still open: it covers the fallback that removing `quit.bat` took away.
 2. 📝 **E1** (first tests) and the `-keylog` diagnostic from 2a — both are
    infrastructure for item 2, and both are cheap.
 3. ✅ **Item 2a/2c** (key table, multiple bindings), carrying the `extended`
