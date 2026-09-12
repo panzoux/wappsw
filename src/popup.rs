@@ -16,9 +16,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, KillTimer,
     PostQuitMessage, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
     ShowWindow, CS_HREDRAW, CS_VREDRAW, DI_NORMAL, EN_CHANGE, GWLP_WNDPROC, HWND_TOPMOST,
-    SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_COMMAND, WM_DESTROY,
-    WM_KEYDOWN, WM_PAINT, WM_TIMER, WNDCLASSW, WNDPROC, WS_BORDER, WS_CHILD, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WA_INACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR,
+    WM_COMMAND, WM_DESTROY, WM_KEYDOWN, WM_PAINT, WM_TIMER, WNDCLASSW, WNDPROC, WS_BORDER,
+    WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::icons::{self, ResolvedIcon};
@@ -26,6 +26,19 @@ use crate::matcher;
 use crate::mru;
 use crate::switch;
 use crate::window_list::{self, TaskWindow};
+
+/// On 32-bit targets `windows-sys` aliases `SetWindowLongPtrW` to
+/// `SetWindowLongW`, which takes and returns `i32` rather than `isize`.
+/// Wrap both behind one pointer-sized signature.
+#[cfg(target_pointer_width = "64")]
+unsafe fn set_window_long_ptr(hwnd: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+    unsafe { SetWindowLongPtrW(hwnd, index, value) }
+}
+
+#[cfg(target_pointer_width = "32")]
+unsafe fn set_window_long_ptr(hwnd: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+    unsafe { SetWindowLongPtrW(hwnd, index, value as i32) as isize }
+}
 
 const CLASS_NAME: &str = "wappsw_popup";
 const EDIT_CLASS_NAME: &str = "EDIT";
@@ -189,7 +202,8 @@ pub fn init() {
         ImmAssociateContext(edit, std::ptr::null_mut());
     }
 
-    let old_proc = unsafe { SetWindowLongPtrW(edit, GWLP_WNDPROC, edit_subclass_proc as *const () as isize) };
+    let old_proc =
+        unsafe { set_window_long_ptr(edit, GWLP_WNDPROC, edit_subclass_proc as *const () as isize) };
     ORIGINAL_EDIT_PROC.store(old_proc, Ordering::SeqCst);
 }
 
