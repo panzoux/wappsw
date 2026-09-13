@@ -4,13 +4,17 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_INSERT, VK_
 
 const DEFAULT_INI: &str = "hotkey=CapsLock\n; autoswitch=500\n; regexcache=100\n; prewarm=true\n";
 
+/// Auto-switch delay when the INI doesn't set `autoswitch` (or sets it to
+/// a bare `on`/`yes`/`true`).
+const DEFAULT_AUTO_SWITCH_MS: u32 = 500;
+
 pub struct Config {
     pub hotkey_vk: u32,
     pub hotkey_scancode: u32,
     /// Milliseconds the filtered list must sit at exactly one match before
-    /// it's auto-switched to, same as pressing Enter. `None` (the default --
-    /// commented out in the generated INI) disables this entirely: a unique
-    /// match then never switches on its own, no matter how long it's shown.
+    /// it's auto-switched to, same as pressing Enter. On by default
+    /// (`DEFAULT_AUTO_SWITCH_MS`); `None` -- from `autoswitch=off`/`no`/`0` --
+    /// disables it: a unique match then never switches on its own.
     pub auto_switch_ms: Option<u32>,
     /// How many recently typed search queries keep their compiled regex.
     /// 0 disables the cache.
@@ -31,36 +35,67 @@ fn config_path() -> PathBuf {
 /// Loads `%APPDATA%\wappsw\config.ini`, creating it with defaults on first
 /// run if missing. Changes require restarting the app -- no file-watching.
 pub fn load() -> Config {
-    let text = std::fs::read_to_string(config_path()).unwrap_or_else(|_| {
-        let _ = std::fs::create_dir_all(config_dir());
-        let _ = std::fs::write(config_path(), DEFAULT_INI);
-        DEFAULT_INI.to_string()
-    });
-    parse(&text)
+    let path = config_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            crate::log::log(&format!("config: reading {}", path.display()));
+            text
+        }
+        Err(e) => {
+            crate::log::log(&format!(
+                "config: cannot read {} ({}), creating it with defaults",
+                path.display(),
+                e
+            ));
+            let _ = std::fs::create_dir_all(config_dir());
+            let _ = std::fs::write(&path, DEFAULT_INI);
+            DEFAULT_INI.to_string()
+        }
+    };
+    let cfg = parse(&text);
+    crate::log::log(&format!(
+        "config: in effect: hotkey vk={:#x} scan={:#x}, autoswitch={}, regexcache={}, prewarm={}",
+        cfg.hotkey_vk,
+        cfg.hotkey_scancode,
+        match cfg.auto_switch_ms {
+            Some(ms) => format!("{} ms", ms),
+            None => "off".to_string(),
+        },
+        cfg.regex_cache_size,
+        cfg.prewarm
+    ));
+    cfg
 }
 
 /// Parses the INI text. Unknown keys are ignored; an invalid value is
 /// logged and ignored, leaving that setting at its default.
 fn parse(text: &str) -> Config {
     let mut hotkey_name = "CapsLock".to_string();
-    let mut auto_switch_ms = None;
+    let mut auto_switch_ms = Some(DEFAULT_AUTO_SWITCH_MS);
     let mut regex_cache_size = crate::matcher::DEFAULT_CACHE_SIZE;
     let mut prewarm = true;
-    for line in text.lines() {
+    for (n, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=') {
+        crate::log::log(&format!("config: line {}: {}", n + 1, line));
+        let Some((key, value)) = line.split_once('=') else {
+            crate::log::log(&format!("config: line {} has no '=', ignoring", n + 1));
+            continue;
+        };
+        {
             let key = key.trim();
             let value = value.trim();
             if key.eq_ignore_ascii_case("hotkey") {
                 hotkey_name = value.to_string();
-            } else if key.eq_ignore_ascii_case("autoswitch") {
-                match value.parse::<u32>() {
-                    Ok(ms) => auto_switch_ms = Some(ms),
-                    Err(_) => crate::log::log(&format!(
-                        "config: autoswitch value \"{}\" is not a valid number of milliseconds, ignoring",
+            } else if key.eq_ignore_ascii_case("autoswitch")
+                || key.eq_ignore_ascii_case("autoselect")
+            {
+                match parse_auto_switch(value) {
+                    Some(ms) => auto_switch_ms = ms,
+                    None => crate::log::log(&format!(
+                        "config: autoswitch value \"{}\" is not a number of milliseconds or off, ignoring",
                         value
                     )),
                 }
@@ -80,6 +115,8 @@ fn parse(text: &str) -> Config {
                         value
                     )),
                 }
+            } else {
+                crate::log::log(&format!("config: unknown key \"{}\", ignoring", key));
             }
         }
     }
@@ -101,6 +138,16 @@ fn parse_bool(value: &str) -> Option<bool> {
         "false" | "off" | "no" | "0" => Some(false),
         _ => None,
     }
+}
+
+/// `Some(delay)` for a valid value, `None` if unparseable. A number is the
+/// delay in ms, with `0` meaning off; the boolean spellings turn it off or
+/// back on at the default delay.
+fn parse_auto_switch(value: &str) -> Option<Option<u32>> {
+    if let Ok(ms) = value.parse::<u32>() {
+        return Some((ms != 0).then_some(ms));
+    }
+    parse_bool(value).map(|on| on.then_some(DEFAULT_AUTO_SWITCH_MS))
 }
 
 // Hardware scan codes (PC/AT set 1) for the supported hotkeys. These are
@@ -135,9 +182,34 @@ mod tests {
     fn generated_ini_uses_defaults() {
         let cfg = parse(DEFAULT_INI);
         assert_eq!(cfg.hotkey_vk, VK_CAPITAL as u32);
-        assert_eq!(cfg.auto_switch_ms, None);
+        assert_eq!(cfg.auto_switch_ms, Some(DEFAULT_AUTO_SWITCH_MS));
         assert_eq!(cfg.regex_cache_size, crate::matcher::DEFAULT_CACHE_SIZE);
         assert!(cfg.prewarm);
+    }
+
+    #[test]
+    fn autoswitch_is_on_at_500ms_when_absent() {
+        assert_eq!(parse("").auto_switch_ms, Some(500));
+        assert_eq!(parse("hotkey=Insert\n").auto_switch_ms, Some(500));
+    }
+
+    #[test]
+    fn autoswitch_can_be_turned_off() {
+        for off in ["off", "no", "0", "false", "OFF", "No"] {
+            assert_eq!(parse(&format!("autoswitch={}", off)).auto_switch_ms, None, "{}", off);
+        }
+    }
+
+    #[test]
+    fn autoswitch_takes_a_delay_or_on() {
+        assert_eq!(parse("autoswitch=250").auto_switch_ms, Some(250));
+        assert_eq!(parse("autoswitch=off\nautoswitch=on").auto_switch_ms, Some(500));
+    }
+
+    #[test]
+    fn autoselect_is_an_alias() {
+        assert_eq!(parse("autoselect=off").auto_switch_ms, None);
+        assert_eq!(parse("AutoSelect=300").auto_switch_ms, Some(300));
     }
 
     #[test]
@@ -164,9 +236,10 @@ mod tests {
 
     #[test]
     fn invalid_values_keep_defaults() {
-        let cfg = parse("regexcache=lots\nprewarm=maybe\n");
+        let cfg = parse("regexcache=lots\nprewarm=maybe\nautoswitch=soon\n");
         assert_eq!(cfg.regex_cache_size, crate::matcher::DEFAULT_CACHE_SIZE);
         assert!(cfg.prewarm);
+        assert_eq!(cfg.auto_switch_ms, Some(DEFAULT_AUTO_SWITCH_MS));
     }
 
     #[test]

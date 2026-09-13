@@ -79,10 +79,16 @@ pub fn set_auto_switch_delay(ms: Option<u32>) {
 fn update_auto_switch_timer(h: HWND, displayed_len: usize) {
     let ms = AUTO_SWITCH_MS.load(Ordering::SeqCst);
     if ms != AUTO_SWITCH_DISABLED && displayed_len == 1 {
-        unsafe {
-            SetTimer(h, AUTO_SWITCH_TIMER_ID, ms, None);
-        }
+        let ok = unsafe { SetTimer(h, AUTO_SWITCH_TIMER_ID, ms, None) } != 0;
+        crate::log::log(&format!(
+            "auto-switch: 1 match, switching in {} ms{}",
+            ms,
+            if ok { "" } else { " -- SetTimer FAILED" }
+        ));
     } else {
+        if displayed_len == 1 {
+            crate::log::log("auto-switch: 1 match, but autoswitch is off");
+        }
         unsafe {
             KillTimer(h, AUTO_SWITCH_TIMER_ID);
         }
@@ -285,7 +291,6 @@ fn hide() {
 fn refilter() {
     let h = hwnd();
     let query_text = read_edit_text();
-    let started = std::time::Instant::now();
     // Compiled once and shared by every row: the query is the same for all
     // of them, and generating its migemo pattern is the expensive part.
     let query = matcher::compile(&query_text);
@@ -314,12 +319,6 @@ fn refilter() {
         }
         s.displayed.len()
     });
-    crate::log::log(&format!(
-        "refilter: {}-char query, {} shown, {:.2} ms",
-        query_text.chars().count(),
-        displayed_len,
-        started.elapsed().as_secs_f64() * 1000.0
-    ));
     update_auto_switch_timer(h, displayed_len);
     unsafe {
         InvalidateRect(h, std::ptr::null(), 0);
@@ -582,6 +581,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // refilter(), which already resets this timer on any change,
                 // so this should always still be true when the timer fires.
                 let still_unique = STATE.with(|s| s.borrow().displayed.len() == 1);
+                crate::log::log(&format!(
+                    "auto-switch: timer fired, still 1 match: {}",
+                    still_unique
+                ));
                 if still_unique {
                     confirm_selection();
                 }
