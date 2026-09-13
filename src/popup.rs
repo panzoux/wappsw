@@ -285,6 +285,10 @@ fn hide() {
 fn refilter() {
     let h = hwnd();
     let query_text = read_edit_text();
+    let started = std::time::Instant::now();
+    // Compiled once and shared by every row: the query is the same for all
+    // of them, and generating its migemo pattern is the expensive part.
+    let query = matcher::compile(&query_text);
     let displayed_len = STATE.with(|s| {
         let mut s = s.borrow_mut();
         if query_text.trim().is_empty() {
@@ -298,7 +302,7 @@ fn refilter() {
             .items
             .iter()
             .enumerate()
-            .filter(|(_, w)| matcher::window_matches(&query_text, w))
+            .filter(|(_, w)| query.matches(w))
             .map(|(i, _)| i)
             .collect();
         // Zero matches: deliberately keep whatever was displayed before.
@@ -310,6 +314,12 @@ fn refilter() {
         }
         s.displayed.len()
     });
+    crate::log::log(&format!(
+        "refilter: {}-char query, {} shown, {:.2} ms",
+        query_text.chars().count(),
+        displayed_len,
+        started.elapsed().as_secs_f64() * 1000.0
+    ));
     update_auto_switch_timer(h, displayed_len);
     unsafe {
         InvalidateRect(h, std::ptr::null(), 0);

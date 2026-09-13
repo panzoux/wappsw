@@ -23,6 +23,11 @@ fn main() {
 
     let cfg = config::load();
 
+    matcher::set_cache_size(cfg.regex_cache_size);
+    if cfg.prewarm {
+        matcher::prewarm_in_background();
+    }
+
     let hook_handle = hook::install(cfg.hotkey_vk, cfg.hotkey_scancode);
     if hook_handle.is_null() {
         log::log("hook::install returned null -- keyboard hook did not install");

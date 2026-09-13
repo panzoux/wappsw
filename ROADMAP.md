@@ -187,34 +187,67 @@ makes the claim safe to print. The underlying APIs (`DWMWA_CLOAKED`, the
 `ApplicationFrameHost` / `CoreWindow` walk) are all Windows 10-era, so no code
 change was involved.
 
+### ✔️ B1 — compile once per keystroke, cache recent queries, prewarm a–z
+
+**Measured before the work.** A scratch benchmark (same `regex` / `rustmigemo`
+revisions, real dictionary, shipping release profile, 25 windows, every prefix
+of 8 typed words) found the cost is migemo's `query()`, not
+`RegexBuilder::build()`. One romaji letter expands to every reading that starts
+with it (`c` gives a pattern of ~20,000 characters); by the full word
+(`chrome`), `query()` takes 0.04 ms.
+
+**The absolute cost is bimodal, and the cause was not found.** The same
+`query("k")` measured ~172 ms in one release binary and ~31 ms in another, with
+identical dependency versions. Which mode a build landed in shifted with
+unrelated-looking changes: the dictionary as a local versus a `static`, LTO on
+or off, main thread versus a spawned one. Two reproducible modes like that
+suggest a memory-layout effect, but that is a guess. The app's own test binary
+lands in the fast mode: `k` in 51 ms including the dictionary load, all 26
+letters in 302 ms. The shipping exe was not measured.
+
+Slow-mode figures, per keystroke, averaged over all prefixes:
+
+| Path | Time |
+| --- | --- |
+| Before: `query()` + `build()` for each row's title and friendly name | 833 ms |
+| Compile once per keystroke | 25 ms (33×) |
+| Cache hit, matching only | 0.006 ms |
+
+In the fast mode, the first two rows should be roughly a fifth of these. That
+is estimated from the single-query ratio, not measured. The 33× holds in both
+modes, because compiling once per keystroke removes 2N−1 of the 2N `query()`
+calls either way.
+
+A compiled regex holds ~126 KB on average (834 KB for `c`), so the 10,000-entry
+cache first floated would cost about 1.2 GB. It was sized down to 100.
+
+**What landed.**
+1. `refilter` calls [`matcher::compile`](src/matcher.rs) once and tests the
+   resulting `CompiledQuery` against every row. Not configurable: no behaviour
+   change, and no cost.
+2. `regexcache=` (default `100`, `0` disables): least-recently-used cache of
+   compiled queries keyed by exact text. Helps backspace and repeat searches.
+3. `prewarm=` (default `true`): a below-normal-priority thread compiles `a`–`z`
+   at startup. These entries are never evicted, and are kept even with
+   `regexcache=0`. It also builds the dictionary, which covers 📝 B2.
+
+**Verified:** 14 unit tests (`cargo test`) cover INI parsing of both keys
+(including invalid values and off switches), LRU eviction, zero capacity,
+prewarmed entries surviving, and migemo/case-insensitive matching. Two opt-in
+release tests (`cargo test --release -- --ignored --nocapture`) time a cache
+miss against a hit for `k` (58 ms vs 1 µs) and run the real prewarm thread to
+completion.
+
+**Not yet verified in the running app:** the elevated instance kept
+`target\release\wappsw.exe` locked, so the new build was not exercised
+end-to-end. Under `-log`, `refilter` now writes one line per keystroke with the
+elapsed milliseconds, so the effect can be read from `log.txt` directly. The
+`matcher: prewarmed a-z in N ms` line also shows which mode the shipping exe
+lands in: roughly 250–300 ms is the fast mode, above a second is the slow one.
+
 ---
 
 ## ❓ Needs your decision
-
-### ❓ B1 — one regex compile per keystroke instead of ~50
-
-Answering your question: "per window" meant **per row in the list** — per open
-task window being filtered — not per popup window. The count is
-`2 x (number of open windows)` per keystroke, not 1000. With 25 apps open that
-is about 50 compilations per character typed.
-
-The path: `refilter` runs on every `EN_CHANGE`
-([popup.rs:282](src/popup.rs:282)) and calls
-[`window_matches`](src/matcher.rs:41) for each item;
-`window_matches` calls `regex_matches` **twice** — once for the title, once for
-the friendly name — and each of those runs `query()` *and*
-`RegexBuilder::build()` ([matcher.rs:26](src/matcher.rs:26)). The query string
-is identical every time, so all of that work produces the same regex over and
-over.
-
-**Fix.** Compile once at the top of `refilter`, pass the compiled `Regex` down.
-`2N` becomes `1`. No behaviour change, no new dependency, contained to two
-files.
-
-Whether this is *perceptible* today depends on how many windows you keep open
-and how fast migemo's `query()` is on your dictionary — it may well be fine at
-your usual window count. Worth a measurement before the work, not after.
-**Effort.** S.
 
 ### ❓ A1 — `hotkey=INSERT` probably also fires on Numpad 0
 
@@ -268,7 +301,12 @@ app with no window, no log line and no trace — the app simply vanishes after
 days in the background. Panics are exactly the case where the user has no
 chance to have turned logging on in advance. **Effort.** S.
 
-### 📝 B2 — dictionary construction on the first keystroke
+### ✔️ B2 — dictionary construction on the first keystroke
+
+**Covered by ✔️ B1's prewarm:** with `prewarm=true` (the default) the
+background thread builds the dictionary before compiling `a`–`z`. With
+`prewarm=false` the original behaviour below still applies.
+
 
 `dictionary()` ([matcher.rs:13](src/matcher.rs:13)) builds the
 `CompactDictionary` lazily inside the first search's first keystroke, and
