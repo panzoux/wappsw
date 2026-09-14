@@ -315,6 +315,25 @@ it on a background thread at startup would move the cost off the first
 interaction. Noted, not scheduled — you do not observe it as slow, and it
 should be measured before anything is changed. **Effort.** S.
 
+### ✔️ B3 — AND search: space-separated words all must match
+
+Some apps append a number to a window's title to distinguish multiple
+instances (e.g. "2) afx"), and there was no way to search for that directly —
+migemo has no "both of these, anywhere, any order" operator in a single
+pattern.
+
+**What landed.** [`matcher::compile`](src/matcher.rs) splits the query on
+whitespace (including full-width `　`) and compiles each word as its own
+migemo term, cached individually under `regexcache` exactly as single-word
+queries always were — `afx 2` and `afx 3` share the cached `afx` compile. A
+new `Query` type wraps the resulting terms; `Query::matches` requires every
+term to match (title or friendly name, same as before), so word order doesn't
+matter. See the README's "複数の単語による絞り込み（AND検索）" section.
+
+**Verified:** unit tests in `matcher.rs` cover AND matching across two words,
+order independence, a match split across title and friendly name, and
+whitespace normalization.
+
 ### 📝 C2 — `PageUp` / `PageDown` / `Home` / `End` in the list
 
 [popup.rs:485](src/popup.rs:485) handles only `Up`/`Down`. With

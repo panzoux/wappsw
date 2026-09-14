@@ -51,6 +51,21 @@ impl CompiledQuery {
     }
 }
 
+/// A search box query, split on whitespace into independently compiled
+/// terms. A window matches only if every term matches (AND), which lets a
+/// query like "afx 2" find "2) afx" even though no single migemo pattern
+/// could express "both of these, in any order, anywhere". Each term is
+/// cached under its own text (see `compile_term`), so "afx 2" and "afx 3"
+/// share the cached "afx" compile.
+#[derive(Clone)]
+pub struct Query(Vec<CompiledQuery>);
+
+impl Query {
+    pub fn matches(&self, window: &TaskWindow) -> bool {
+        self.0.iter().all(|term| term.matches(window))
+    }
+}
+
 /// Compiles `query_text` into a migemo regex (romaji -> kana/kanji reading
 /// expansion). Case-insensitive: migemo's own query() keeps the literal
 /// query text in whatever case was typed (e.g. "c"), and Japanese has no
@@ -78,12 +93,16 @@ fn build(query_text: &str) -> CompiledQuery {
     }
 }
 
-/// Compiles `query_text`, reusing an earlier compile of the same text when
+/// Splits `query_text` on whitespace (including full-width `　`) and
+/// compiles each word as a separate AND'd term; see `Query`. A blank query
+/// yields no terms, which `Query::matches` treats as matching everything.
+pub fn compile(query_text: &str) -> Query {
+    Query(query_text.split_whitespace().map(compile_term).collect())
+}
+
+/// Compiles a single term, reusing an earlier compile of the same text when
 /// the cache still holds one.
-pub fn compile(query_text: &str) -> CompiledQuery {
-    if query_text.trim().is_empty() {
-        return CompiledQuery::All;
-    }
+fn compile_term(query_text: &str) -> CompiledQuery {
     if let Some(hit) = cache().get(query_text) {
         return hit;
     }
@@ -227,6 +246,26 @@ mod tests {
     #[test]
     fn friendly_name_alone_can_match() {
         assert!(build("chrome").matches(&window("GitHub - oguna/rustmigemo", "Google Chrome")));
+    }
+
+    #[test]
+    fn multiple_words_require_all_to_match_and_ignore_order() {
+        let w = window("2) afx - Notepad", "Notepad");
+        assert!(compile("afx 2").matches(&w));
+        assert!(compile("2 afx").matches(&w));
+        assert!(!compile("afx 3").matches(&w));
+    }
+
+    #[test]
+    fn multiple_words_can_each_match_a_different_field() {
+        let w = window("afx", "Chrome");
+        assert!(compile("afx chrome").matches(&w));
+    }
+
+    #[test]
+    fn extra_whitespace_between_words_is_ignored() {
+        let w = window("2) afx - Notepad", "Notepad");
+        assert!(compile("  afx   2  ").matches(&w));
     }
 
     #[test]
