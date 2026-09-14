@@ -17,18 +17,34 @@
     Without -Publish this only runs `cargo test`, builds each target and
     writes into dist\ -- nothing leaves the machine.
 
-    With -Publish it first checks that master is clean, contains origin/master
-    and that the tag doesn't exist yet; then after packaging it creates the
+    With -Publish it first checks that master is clean, contains origin/master,
+    that the tag doesn't exist yet, and that -Targets covers every officially
+    released target (see -AllowPartial); then after packaging it creates the
     annotated tag v<version> ("wappsw v<version>", same as v0.1.0), pushes
     master and the tag, and runs `gh release create` with the zips.
 
 .PARAMETER Targets
-    Rust target triples to build. Every one must have its standard library
-    installed; a missing one is an error rather than a silently smaller
-    release. Pass a subset to ship fewer.
+    Rust target triples to build. Defaults to every officially released
+    target (currently i686-pc-windows-msvc and x86_64-pc-windows-msvc, i.e.
+    every key in $TargetInfo). A target whose standard library isn't
+    installed yet is installed automatically via `rustup target add` --
+    this is what makes running this script produce the same two zips
+    whether the machine's default host toolchain is 32-bit or 64-bit;
+    v0.2.0 shipped without an x86_64 zip because that step didn't exist yet
+    and the build machine only had the i686 target on hand. Pass a subset
+    to build fewer, but see -Publish/-AllowPartial below.
 
 .PARAMETER Publish
-    Tag, push and create the GitHub Release. Requires -NotesFile.
+    Tag, push and create the GitHub Release. Requires -NotesFile. Refuses
+    to run unless -Targets covers every key in $TargetInfo, so a release
+    can no longer silently ship fewer architectures than the project
+    officially supports -- pass -AllowPartial to do that deliberately
+    (e.g. a hotfix for one architecture only).
+
+.PARAMETER AllowPartial
+    Lets -Publish proceed even if -Targets doesn't cover every officially
+    released target. Only meant for a deliberate single-architecture
+    release; the release notes should say so explicitly when used.
 
 .PARAMETER NotesFile
     Markdown file used as the release body.
@@ -47,6 +63,7 @@
 param(
     [string[]]$Targets = @('i686-pc-windows-msvc', 'x86_64-pc-windows-msvc'),
     [switch]$Publish,
+    [switch]$AllowPartial,
     [string]$NotesFile
 )
 
@@ -91,17 +108,30 @@ if (-not $versionLine) { throw "no version = `"...`" line in $Manifest" }
 $Version = $versionLine.Matches[0].Groups[1].Value
 $Tag = "v$Version"
 
-$sysroot = (& rustc --print sysroot).Trim()
-if ($LASTEXITCODE -ne 0) { throw 'rustc --print sysroot failed -- is Rust installed?' }
-$installed = @(Get-ChildItem (Join-Path $sysroot 'lib\rustlib') -Directory |
-    Where-Object { Test-Path (Join-Path $_.FullName 'lib') } | ForEach-Object Name)
 foreach ($t in $Targets) {
     if (-not $TargetInfo.ContainsKey($t)) {
         throw "unsupported target '$t' (known: $($TargetInfo.Keys -join ', '))"
     }
+}
+
+# A target whose standard library isn't installed is installed on the spot
+# rather than treated as an error: this is the fix for v0.2.0 shipping
+# without an x86_64 zip, built on a machine that only had i686 on hand.
+# Re-derive $installed from rustup itself (not the sysroot layout) after
+# each add so this stays correct regardless of how rustup lays out targets.
+function Get-InstalledTargets {
+    @(& rustup target list --installed)
+}
+if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+    throw 'rustup is not on PATH -- needed to install missing targets automatically.'
+}
+$installed = Get-InstalledTargets
+foreach ($t in $Targets) {
     if ($installed -notcontains $t) {
-        throw ("target '$t' is not installed (installed: $($installed -join ', ')). " +
-            "Install it (rustup target add $t) or pass -Targets with only the installed ones.")
+        Write-Host "target '$t' is not installed -- installing it (rustup target add $t)..." -ForegroundColor Yellow
+        Invoke-Native "rustup target add $t" { rustup target add $t }
+        $installed = Get-InstalledTargets
+        if ($installed -notcontains $t) { throw "rustup target add $t reported success but the target still isn't listed as installed" }
     }
 }
 
@@ -113,6 +143,14 @@ if ($Publish) {
     if (-not $NotesFile) { throw '-Publish needs -NotesFile <release notes .md>' }
     if (-not (Test-Path $NotesFile)) { throw "notes file not found: $NotesFile" }
     $NotesFile = (Resolve-Path $NotesFile).Path
+
+    if (-not $AllowPartial) {
+        $missing = @($TargetInfo.Keys | Where-Object { $Targets -notcontains $_ })
+        if ($missing) {
+            throw ("-Publish needs every officially released target, missing: $($missing -join ', '). " +
+                "Pass them via -Targets, or pass -AllowPartial for a deliberate single-architecture release.")
+        }
+    }
 
     $dirty = & git -C $Repo status --porcelain
     if ($dirty) { throw "working tree is not clean:`n$($dirty -join "`n")" }
