@@ -120,6 +120,10 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             if now_disabled && popup::is_open() {
                 popup::alttab_cancel();
             }
+            // Belt-and-suspenders alongside the fix below: whatever state a
+            // cancelled session left DETACHED in, re-enabling should always
+            // start clean rather than depend on it.
+            DETACHED.store(false, Ordering::SeqCst);
             DISABLED.store(now_disabled, Ordering::SeqCst);
             crate::log::log(&format!(
                 "alttab_hook: Ctrl+Shift+F12 -- {}",
@@ -144,10 +148,20 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         }
 
         if vk == VK_TAB as u32 {
-            if is_down(VK_MENU) && !DETACHED.load(Ordering::SeqCst) {
+            let popup_open = popup::is_open();
+            // A closed popup can always be (re)opened, regardless of
+            // whatever DETACHED was left at -- checking `!popup_open` first
+            // rather than gating on `!DETACHED` alone. Without this, ending
+            // a detached session through Enter/Esc/Ctrl+Q (which close the
+            // popup via popup.rs's own edit_subclass_proc and never touch
+            // this hook, let alone DETACHED) left DETACHED stuck `true`
+            // forever, and the very next Alt+Tab press fell straight
+            // through to passthrough -- permanently, until restart. See
+            // docs/alt-tab-hotkey.md's "bugs found and fixed" section.
+            if is_down(VK_MENU) && (!popup_open || !DETACHED.load(Ordering::SeqCst)) {
                 if is_keydown(msg) {
                     let reverse = is_down(VK_SHIFT);
-                    if !popup::is_open() {
+                    if !popup_open {
                         crate::log::log("alttab_hook: Alt+Tab -- opening");
                         DETACHED.store(false, Ordering::SeqCst);
                         popup::alttab_open();
@@ -164,8 +178,8 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 // window is behind the popup.
                 return 1;
             }
-            // Alt not held, or the session was detached into filter mode
-            // (where Tab is just an ordinary key, same as single-key mode):
+            // Alt not held, or a detached session is still open (where Tab
+            // is just an ordinary key, same as single-key mode):
             // not ours.
             return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
         }

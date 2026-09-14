@@ -14,10 +14,12 @@ const MAX_ATTEMPTS: u32 = 5;
 pub fn switch_to(hwnd: HWND) {
     unsafe {
         if IsIconic(hwnd) != 0 {
+            crate::log::log(&format!("switch::switch_to: target={:?} was minimized -- restoring", hwnd));
             ShowWindow(hwnd, SW_RESTORE);
         }
     }
-    force_foreground(hwnd);
+    let ok = force_foreground(hwnd);
+    crate::log::log(&format!("switch::switch_to: target={:?} force_foreground -> {}", hwnd, ok));
 }
 
 /// Makes `hwnd` the foreground window, retrying with AttachThreadInput.
@@ -46,6 +48,16 @@ pub fn force_foreground(hwnd: HWND) -> bool {
             if attached {
                 AttachThreadInput(current_thread, fg_thread, 0);
             }
+
+            crate::log::log(&format!(
+                "switch::force_foreground: attempt {}/{} target={:?} prior_fg={:?} attached={} ok={}",
+                attempt + 1,
+                MAX_ATTEMPTS,
+                hwnd,
+                fg,
+                attached,
+                ok != 0,
+            ));
 
             if ok != 0 {
                 return true;

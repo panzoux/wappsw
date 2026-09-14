@@ -221,6 +221,31 @@ just falls through to an ordinary pass-through rather than re-triggering a
 commit — no explicit tagging of synthetic events was needed to prevent a
 loop.
 
+## Alt+Tab permanently stopped working after using Alt+Q once, until restart
+
+Reported as "`Ctrl+Shift+F12` disable, then re-enable, and Alt+Tab needs a
+restart to work again" — the trigger turned out to be broader than just the
+`F12` chord.
+
+*Cause:* the Tab-down handler's outer condition was
+`is_down(VK_MENU) && !DETACHED.load(...)`, guarding *both* "open a new
+session" and "advance an existing one" behind the same check. `DETACHED` is
+only ever cleared inside the "open a new session" branch itself. So once a
+session was detached (`Alt+Q`) and then closed through any path that
+doesn't go through this hook — `Enter`/`Esc`/`Ctrl+Q` in the edit control
+(`popup.rs`'s `edit_subclass_proc`), or the `Ctrl+Shift+F12` emergency
+disable cancelling it — `DETACHED` stayed `true` forever. The next Alt+Tab
+press then failed `!DETACHED.load(...)` before ever reaching the branch that
+would have reset it, and fell straight through to plain pass-through:
+permanently, since nothing else in the hook ever clears `DETACHED`.
+
+*Fix:* the gate now checks `!popup::is_open() || !DETACHED.load(...)` — a
+*closed* popup can always be reopened regardless of whatever `DETACHED` was
+left at, matching the file's own "single source of truth" principle already
+used for session-active tracking (see the state machine section above).
+`Ctrl+Shift+F12` also now force-resets `DETACHED` as a second layer of
+defense. Not yet confirmed against the user's exact repro — needs a retest.
+
 ## Known simplifications (deliberately deferred, not fixed here)
 
 - **Shift held on the very first Tab of a session** does not reverse the
@@ -250,6 +275,59 @@ loop.
   injection may only partially exercise this; manual testing on real
   hardware is expected to be the primary verification method.
 
+## Opening the popup on top of Notepad needed two Alt+Tab presses
+
+Reported: switching *away from* Notepad (to open wappsw's popup) sometimes
+needed two full Alt+Tab gestures before the popup's selection was actually
+usable — other apps tested only needed one. Root-caused from a `-log`
+capture (`popup::open`/`popup::confirm_selection`/`switch::force_foreground`
+diagnostics added while chasing this):
+
+```
+alttab_hook: Alt+Tab -- opening
+switch::force_foreground: attempt 1/5 target=<popup> prior_fg=<notepad> attached=true ok=false
+switch::force_foreground: attempt 2/5 target=<popup> prior_fg=<other>   attached=true ok=true
+popup::open: force_foreground -> true, now foreground=<popup>
+alttab_hook: Alt+Tab -- opening        <-- a SECOND "opening" before any commit
+popup::open: force_foreground -> true, now foreground=<popup>
+alttab_hook: Alt released -- committing
+```
+
+*Cause:* reclaiming foreground from Notepad specifically needed a second
+`SetForegroundWindow` attempt (attempt 1 was rejected) inside
+`switch::force_foreground`'s retry loop, each attempt wrapped in its own
+`AttachThreadInput` attach/detach pair. That extra attach/detach churn has a
+side effect: it generates a `WM_ACTIVATE`/`WA_INACTIVE` notification for the
+popup, delivered *asynchronously* (queued, not synchronous with the
+`SetForegroundWindow` call that produced it) — so it lands on the popup's
+`wndproc` moments *after* `open()` has already returned and successfully
+shown it. `wndproc`'s `WM_ACTIVATE` handler unconditionally called `hide()`
+on any `WA_INACTIVE`, immediately hiding the popup that had just opened.
+`is_open()` (a plain `IsWindowVisible` check) then correctly reports `false`
+to the very next Tab-down, so the hook treats it as a fresh session and opens
+again from scratch — which is what the user perceived as "needing to press
+twice." Apps that don't need a retried `SetForegroundWindow` attempt never
+generate this spurious deactivation, which is why only some apps (so far
+just Notepad) showed it.
+
+*Fix:* the `WM_ACTIVATE` handler now skips `hide()` while Alt is physically
+held (`alt_held()`, a new small helper factored out of
+`update_auto_switch_timer`, which already uses the exact same guard for the
+exact same class of problem — see "Interaction with `autoswitch`" above). A
+real dismissal (`Esc`, `Enter`/`Ctrl+Q` in the edit control, the Alt-release
+commit, or `Ctrl+Shift+F12` disabling) never depends on this handler, so
+nothing legitimate is suppressed by the guard.
+
+## `Ctrl+Alt+Tab` / `Win+Alt+Tab` also open wappsw's popup
+
+Expected, not a bug: this hook only checks whether `Alt` is held when `Tab`
+arrives — it never looks at `Ctrl` or `Win`. Native Windows Alt+Tab has the
+same non-distinction (that's *why* `Ctrl+Alt+Tab` opens the OS switcher at
+all — Ctrl only changes whether releasing Alt commits immediately or leaves
+the switcher "sticky" open). Matching that "sticky" behavior for
+`Ctrl+Alt+Tab` specifically would be a real feature, not a bug fix — noted
+here as a possible future roadmap item, not undertaken.
+
 ## Test plan
 
 Manual, with `-log` on, `hotkey=AltTab` set:
@@ -272,3 +350,14 @@ Manual, with `-log` on, `hotkey=AltTab` set:
 9. Alt held, `Alt+Q` — popup stays open after releasing Alt; typing filters
    the list via migemo; `Up`/`Down`/`Enter`/`Esc` behave as in single-key
    mode.
+10. Regression for the "stuck after Alt+Q" fix: `Alt+Q` to detach, then
+    `Enter` (or `Esc`, or `Ctrl+Q`) to close that detached session, then a
+    fresh Alt+Tab — must open normally, not silently do nothing.
+11. Regression for the same fix via the `F12` path: get a session detached
+    (`Alt+Q`), then `Ctrl+Shift+F12` to disable while it's still open, then
+    `Ctrl+Shift+F12` again to re-enable, then a fresh Alt+Tab — must open
+    normally.
+12. Regression for the "needed Alt+Tab twice on Notepad" fix: with Notepad
+    focused, press Alt+Tab once — the popup must open and be usable
+    (selection visible, Tab advances it) on that single press, not just on a
+    second one.

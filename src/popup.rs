@@ -88,10 +88,13 @@ pub fn set_auto_switch_delay(ms: Option<u32>) {
 /// later when that queued notification reaches `refilter` and re-arms it.
 /// Checking Alt's state here instead, at the point of arming, closes that
 /// gap regardless of which caller triggered it.
+fn alt_held() -> bool {
+    unsafe { (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0 }
+}
+
 fn update_auto_switch_timer(h: HWND, displayed_len: usize) {
     let ms = AUTO_SWITCH_MS.load(Ordering::SeqCst);
-    let alt_held = unsafe { (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0 };
-    if ms != AUTO_SWITCH_DISABLED && displayed_len == 1 && !alt_held {
+    if ms != AUTO_SWITCH_DISABLED && displayed_len == 1 && !alt_held() {
         let ok = unsafe { SetTimer(h, AUTO_SWITCH_TIMER_ID, ms, None) } != 0;
         crate::log::log(&format!(
             "auto-switch: 1 match, switching in {} ms{}",
@@ -102,7 +105,7 @@ fn update_auto_switch_timer(h: HWND, displayed_len: usize) {
         if displayed_len == 1 {
             crate::log::log(&format!(
                 "auto-switch: 1 match, but {}",
-                if alt_held { "Alt is held" } else { "autoswitch is off" }
+                if alt_held() { "Alt is held" } else { "autoswitch is off" }
             ));
         }
         unsafe {
@@ -328,10 +331,16 @@ fn open(h: HWND) {
     unsafe {
         ShowWindow(h, SW_SHOW);
     }
-    switch::force_foreground(h);
+    let foregrounded = switch::force_foreground(h);
     unsafe {
         SetFocus(edit_hwnd());
     }
+    crate::log::log(&format!(
+        "popup::open: popup={:?} force_foreground -> {}, now foreground={:?}",
+        h,
+        foregrounded,
+        unsafe { GetForegroundWindow() },
+    ));
 }
 
 fn hide() {
@@ -414,6 +423,12 @@ fn confirm_selection() {
     // Switch *before* hiding: the popup must still hold the foreground when
     // SetForegroundWindow(target) is called, or Windows' foreground-lock
     // restriction can reject the call once something else has reclaimed it.
+    crate::log::log(&format!(
+        "popup::confirm_selection: popup={:?} target={:?} current foreground={:?}",
+        hwnd(),
+        target,
+        unsafe { GetForegroundWindow() },
+    ));
     if let Some(target) = target {
         switch::switch_to(target);
     }
@@ -620,7 +635,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_ACTIVATE => {
-            if (wparam as u32 & 0xFFFF) == WA_INACTIVE {
+            // Skipped while Alt is physically held, same reasoning as
+            // update_auto_switch_timer's guard above: -log showed
+            // AttachThreadInput churn inside switch::force_foreground's
+            // retry loop (needed when SetForegroundWindow's first attempt
+            // is rejected, observed reclaiming foreground from Notepad
+            // specifically) generates a queued WM_ACTIVATE/WA_INACTIVE for
+            // this window shortly after it successfully became active --
+            // hiding on that reopened the popup on every second Alt+Tab
+            // press instead of showing the selection the first time. A real
+            // dismissal (Esc/Enter/Ctrl+Q/Alt-release-commit/F12-disable)
+            // never depends on this handler.
+            if (wparam as u32 & 0xFFFF) == WA_INACTIVE && !alt_held() {
                 hide();
             }
             0
