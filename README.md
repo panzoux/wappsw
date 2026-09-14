@@ -63,7 +63,7 @@ hotkey=CapsLock
 ### `hotkey`
 
 ホットキーとして割り当てるキーを指定します。
-次の3つに対応しています。（殆どのキーに対応していません）
+次の4つに対応しています。（殆どのキーに対応していません）
 設定値について、大文字・小文字、`-` / `_` / 半角スペースは無視されます。
 
 | 設定値 | キー |
@@ -71,8 +71,21 @@ hotkey=CapsLock
 | `CapsLock` / `Caps` | Caps Lock（デフォルト） |
 | `ScrollLock` / `Scroll` | Scroll Lock |
 | `Insert` / `Ins` | Insert |
+| `AltTab` / `Alt+Tab` | ネイティブのAlt+Tabを置き換える特殊モード（詳細下記） |
 
 ※無効な値が設定された場合はログに警告を出力し、デフォルトの `CapsLock` が使われます。
+
+#### `hotkey=AltTab`（Alt+Tab置き換えモード）
+
+単体キーの代わりに、実際の Alt+Tab / Shift+Alt+Tab を横取りするモードです。設計・状態遷移・既知の制約の詳細は
+[docs/alt-tab-hotkey.md](docs/alt-tab-hotkey.md) を参照してください。要点のみ:
+
+* `Alt` を押しながら `Tab` を叩くとポップアップが開き、押している間 `Tab` / `Shift+Tab` で選択移動、`Alt` を離すと
+  確定、`Esc` でキャンセルします（ネイティブのAlt+Tabと同じ操作感）。
+* このままだと通常の入力して絞り込む操作ができないため、セッション中に **`Alt+Q`** を押すと、以降 `Alt` を離しても
+  確定せず、通常のポップアップ（入力してmigemo検索、↑↓、Enter、Esc、Ctrl+Q）に切り替わります。
+* **`Ctrl+Shift+F12`** で機能のON/OFFを切り替えられます（緊急停止用。OFF中はネイティブのAlt+Tabが動作します）。
+  設定ファイルには保存されず、再起動すると常にONに戻ります。
 
 ### `autoswitch`（自動切替機能）
 

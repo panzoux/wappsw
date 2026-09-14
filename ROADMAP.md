@@ -331,23 +331,18 @@ popup. Two match arms — with the catch that `Tab` currently moves focus out of
 the edit control, so it must be intercepted rather than merely handled.
 **Effort.** S.
 
-**The large part — substituting `Alt+Tab` itself.** A `WH_KEYBOARD_LL` hook
-does receive `Alt+Tab` and can swallow it, so this is technically possible, and
-the elevated scheduled task from `setup\install-task.ps1` already solves the
-UIPI half. The real obstacle is interaction model, not plumbing:
-
-- wappsw today is *press to open, type to filter, Enter to commit*. `Alt+Tab`
-  is *hold Alt, tap Tab to advance, release Alt to commit*. Supporting the
-  second means tracking the Alt keyup as the commit event — a new state machine
-  in the hook, not a new key binding.
-- Both models in one popup is possible (tap to open and type; or hold and tap)
-  but doubles the states that need testing.
-- Failure is severe: a bug that swallows `Alt+Tab` without opening anything
-  leaves the machine with no window switcher at all. This one wants 📝 E1 in
-  place first.
-
-Worth treating as its own feature with its own design pass, not a row in item
-2's key table. **Effort.** L.
+**The large part — substituting `Alt+Tab` itself.** ✅ **Design approved,
+implementation in progress.** Full design, state machine and test plan now
+live in [docs/alt-tab-hotkey.md](docs/alt-tab-hotkey.md) — summary:
+`hotkey=AltTab` becomes a second value for the existing `hotkey=` key
+(mutually exclusive with `CapsLock` and every other single-key value, same
+one-hotkey-at-a-time model as today), implemented as its own module
+([src/alttab_hook.rs](src/alttab_hook.rs)) rather than a row in item 2's key
+table, since `Alt+Tab` is *hold Alt, tap Tab to advance, release Alt to
+commit* — a genuinely different interaction from wappsw's *press to open,
+type to filter, Enter to commit* — and needs its own state machine, not a new
+key binding. Includes a `Ctrl+Shift+F12` emergency-disable chord. **Effort.**
+L.
 
 ### 📝 C5 — readline/emacs editing keys in the search box
 

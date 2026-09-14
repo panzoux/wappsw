@@ -8,9 +8,19 @@ const DEFAULT_INI: &str = "hotkey=CapsLock\n; autoswitch=500\n; regexcache=100\n
 /// a bare `on`/`yes`/`true`).
 const DEFAULT_AUTO_SWITCH_MS: u32 = 500;
 
+/// What the configured `hotkey=` value means. Exactly one of these is ever
+/// active -- main.rs installs `hook::install` for `SingleKey` or
+/// `alttab_hook::install` for `AltTab`, never both. See
+/// docs/alt-tab-hotkey.md for why `AltTab` needs its own hook module rather
+/// than being a third field on `SingleKey`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyMode {
+    SingleKey { vk: u32, scancode: u32 },
+    AltTab,
+}
+
 pub struct Config {
-    pub hotkey_vk: u32,
-    pub hotkey_scancode: u32,
+    pub hotkey_mode: HotkeyMode,
     /// Milliseconds the filtered list must sit at exactly one match before
     /// it's auto-switched to, same as pressing Enter. On by default
     /// (`DEFAULT_AUTO_SWITCH_MS`); `None` -- from `autoswitch=off`/`no`/`0` --
@@ -53,10 +63,13 @@ pub fn load() -> Config {
         }
     };
     let cfg = parse(&text);
+    let hotkey_desc = match cfg.hotkey_mode {
+        HotkeyMode::SingleKey { vk, scancode } => format!("single-key vk={:#x} scan={:#x}", vk, scancode),
+        HotkeyMode::AltTab => "AltTab".to_string(),
+    };
     crate::log::log(&format!(
-        "config: in effect: hotkey vk={:#x} scan={:#x}, autoswitch={}, regexcache={}, prewarm={}",
-        cfg.hotkey_vk,
-        cfg.hotkey_scancode,
+        "config: in effect: hotkey={}, autoswitch={}, regexcache={}, prewarm={}",
+        hotkey_desc,
         match cfg.auto_switch_ms {
             Some(ms) => format!("{} ms", ms),
             None => "off".to_string(),
@@ -121,15 +134,15 @@ fn parse(text: &str) -> Config {
         }
     }
 
-    let (hotkey_vk, hotkey_scancode) = key_name_to_vk(&hotkey_name).unwrap_or_else(|| {
+    let hotkey_mode = key_name_to_mode(&hotkey_name).unwrap_or_else(|| {
         crate::log::log(&format!(
             "config: unrecognized hotkey \"{}\", falling back to CapsLock",
             hotkey_name
         ));
-        (VK_CAPITAL as u32, CAPS_LOCK_SCANCODE)
+        HotkeyMode::SingleKey { vk: VK_CAPITAL as u32, scancode: CAPS_LOCK_SCANCODE }
     });
 
-    Config { hotkey_vk, hotkey_scancode, auto_switch_ms, regex_cache_size, prewarm }
+    Config { hotkey_mode, auto_switch_ms, regex_cache_size, prewarm }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -163,13 +176,15 @@ const CAPS_LOCK_SCANCODE: u32 = 0x3A;
 const SCROLL_LOCK_SCANCODE: u32 = 0x46;
 const INSERT_SCANCODE: u32 = 0x52;
 
-/// v1 supports bare single keys only -- no modifier+key combos (that's a
-/// deliberate v2 deferral, see the design notes).
-fn key_name_to_vk(name: &str) -> Option<(u32, u32)> {
+/// v1 single-key values support bare keys only -- no modifier+key combos
+/// (that's a deliberate v2 deferral, see the design notes). `AltTab` is the
+/// one non-single-key value; see docs/alt-tab-hotkey.md.
+fn key_name_to_mode(name: &str) -> Option<HotkeyMode> {
     match name.to_ascii_lowercase().replace(['_', '-', ' '], "").as_str() {
-        "capslock" | "caps" => Some((VK_CAPITAL as u32, CAPS_LOCK_SCANCODE)),
-        "scrolllock" | "scroll" => Some((VK_SCROLL as u32, SCROLL_LOCK_SCANCODE)),
-        "insert" | "ins" => Some((VK_INSERT as u32, INSERT_SCANCODE)),
+        "capslock" | "caps" => Some(HotkeyMode::SingleKey { vk: VK_CAPITAL as u32, scancode: CAPS_LOCK_SCANCODE }),
+        "scrolllock" | "scroll" => Some(HotkeyMode::SingleKey { vk: VK_SCROLL as u32, scancode: SCROLL_LOCK_SCANCODE }),
+        "insert" | "ins" => Some(HotkeyMode::SingleKey { vk: VK_INSERT as u32, scancode: INSERT_SCANCODE }),
+        "alttab" | "alt+tab" => Some(HotkeyMode::AltTab),
         _ => None,
     }
 }
@@ -181,10 +196,30 @@ mod tests {
     #[test]
     fn generated_ini_uses_defaults() {
         let cfg = parse(DEFAULT_INI);
-        assert_eq!(cfg.hotkey_vk, VK_CAPITAL as u32);
+        assert_eq!(cfg.hotkey_mode, HotkeyMode::SingleKey { vk: VK_CAPITAL as u32, scancode: CAPS_LOCK_SCANCODE });
         assert_eq!(cfg.auto_switch_ms, Some(DEFAULT_AUTO_SWITCH_MS));
         assert_eq!(cfg.regex_cache_size, crate::matcher::DEFAULT_CACHE_SIZE);
         assert!(cfg.prewarm);
+    }
+
+    #[test]
+    fn hotkey_alttab_is_recognized() {
+        for spelling in ["AltTab", "alttab", "Alt+Tab", "alt+tab", "Alt-Tab", "Alt Tab"] {
+            assert_eq!(
+                parse(&format!("hotkey={}", spelling)).hotkey_mode,
+                HotkeyMode::AltTab,
+                "{}",
+                spelling
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_hotkey_falls_back_to_capslock() {
+        assert_eq!(
+            parse("hotkey=NotAKey").hotkey_mode,
+            HotkeyMode::SingleKey { vk: VK_CAPITAL as u32, scancode: CAPS_LOCK_SCANCODE }
+        );
     }
 
     #[test]

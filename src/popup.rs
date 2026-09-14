@@ -11,7 +11,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::Ime::ImmAssociateContext;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, SetFocus, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_Q, VK_RETURN, VK_UP,
+    GetAsyncKeyState, GetKeyState, SetFocus, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_MENU, VK_Q,
+    VK_RETURN, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DrawIconEx, GetClientRect,
@@ -76,9 +77,21 @@ pub fn set_auto_switch_delay(ms: Option<u32>) {
 /// auto-switch timer while it sits at exactly one match, cancels it
 /// otherwise. A fresh keystroke while already at one match restarts the
 /// timer, so the list must go genuinely untouched for the full delay.
+///
+/// Also skipped entirely while Alt is physically held. This matters even
+/// outside `hotkey=AltTab`: committing on a timer while Alt is down
+/// conflicts with any hold-to-browse interaction. It's also what makes
+/// Alt+Tab sessions safe from it without their own bookkeeping -- `open()`
+/// clears the query text via `SetWindowTextW`, which fires an `EN_CHANGE`
+/// delivered *asynchronously* through the message queue, so a one-shot
+/// `KillTimer` called right after `open()` returns can be undone moments
+/// later when that queued notification reaches `refilter` and re-arms it.
+/// Checking Alt's state here instead, at the point of arming, closes that
+/// gap regardless of which caller triggered it.
 fn update_auto_switch_timer(h: HWND, displayed_len: usize) {
     let ms = AUTO_SWITCH_MS.load(Ordering::SeqCst);
-    if ms != AUTO_SWITCH_DISABLED && displayed_len == 1 {
+    let alt_held = unsafe { (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0 };
+    if ms != AUTO_SWITCH_DISABLED && displayed_len == 1 && !alt_held {
         let ok = unsafe { SetTimer(h, AUTO_SWITCH_TIMER_ID, ms, None) } != 0;
         crate::log::log(&format!(
             "auto-switch: 1 match, switching in {} ms{}",
@@ -87,7 +100,10 @@ fn update_auto_switch_timer(h: HWND, displayed_len: usize) {
         ));
     } else {
         if displayed_len == 1 {
-            crate::log::log("auto-switch: 1 match, but autoswitch is off");
+            crate::log::log(&format!(
+                "auto-switch: 1 match, but {}",
+                if alt_held { "Alt is held" } else { "autoswitch is off" }
+            ));
         }
         unsafe {
             KillTimer(h, AUTO_SWITCH_TIMER_ID);
@@ -231,6 +247,43 @@ pub fn on_hotkey() {
         crate::log::log("popup::on_hotkey: hidden -> open()");
         open(h);
     }
+}
+
+/// The following four are `alttab_hook`'s equivalent of `on_hotkey()`: the
+/// same actions (`open`/`move_selection`/`confirm_selection`/`hide`), but
+/// invoked individually rather than toggled by a single repeated key, since
+/// Alt+Tab's interaction (hold Alt, tap Tab to advance, release to commit)
+/// needs each step addressable on its own. See docs/alt-tab-hotkey.md.
+pub(crate) fn alttab_open() {
+    let h = hwnd();
+    if h.is_null() {
+        crate::log::log("popup::alttab_open: popup HWND is null, ignoring");
+        return;
+    }
+    // update_auto_switch_timer (called inside open()) already refuses to
+    // arm while Alt is held, so no extra bookkeeping is needed here.
+    open(h);
+}
+
+pub(crate) fn alttab_advance(delta: i32) {
+    move_selection(delta);
+}
+
+pub(crate) fn alttab_commit() {
+    confirm_selection();
+}
+
+pub(crate) fn alttab_cancel() {
+    hide();
+}
+
+/// The single source of truth `alttab_hook` checks instead of tracking its
+/// own "session active" flag -- the popup can close via paths that never go
+/// through the Alt+Tab hook at all (Enter in the edit control, the
+/// auto-switch timer, WM_ACTIVATE losing focus), and an independent flag
+/// desynced from all of those. See docs/alt-tab-hotkey.md.
+pub(crate) fn is_open() -> bool {
+    unsafe { IsWindowVisible(hwnd()) != 0 }
 }
 
 // The current window sits at index 0 (most-recently-foregrounded); default

@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"] // no console window for this background utility
 
+mod alttab_hook;
 mod config;
 mod hook;
 mod icons;
@@ -28,9 +29,16 @@ fn main() {
         matcher::prewarm_in_background();
     }
 
-    let hook_handle = hook::install(cfg.hotkey_vk, cfg.hotkey_scancode);
+    // Exactly one of these installs, never both -- see config::HotkeyMode
+    // and docs/alt-tab-hotkey.md. `hook::uninstall` is a generic
+    // UnhookWindowsHookEx wrapper, so it's reused below regardless of which
+    // one actually ran.
+    let hook_handle = match cfg.hotkey_mode {
+        config::HotkeyMode::SingleKey { vk, scancode } => hook::install(vk, scancode),
+        config::HotkeyMode::AltTab => alttab_hook::install(),
+    };
     if hook_handle.is_null() {
-        log::log("hook::install returned null -- keyboard hook did not install");
+        log::log("hook install returned null -- keyboard hook did not install");
     }
 
     let mru_hook = mru::install();
