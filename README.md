@@ -121,6 +121,18 @@ cargo build --release
 ビルドすると `target\release\wappsw.exe` に単体で動作する実行ファイルが生成されます。
 ※Migemo辞書データ（`assets/migemo-compact-dict.bin`）は `include_bytes!` でバイナリ内に直接埋め込まれるため、実行時に外部の辞書ファイルを用意する必要はありません。
 
+### リリースの作成
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release.ps1
+
+```
+
+`cargo test` と各ターゲットのリリースビルドを行い、`dist\wappsw-v<バージョン>-x86.zip`（`i686-pc-windows-msvc`）と `dist\wappsw-v<バージョン>-x86_64.zip`（`x86_64-pc-windows-msvc`）を作成します。バージョンは `Cargo.toml` から読み取ります。zip には `wappsw.exe`、`README.md`、`LICENSE`、`setup\install-task.ps1`、`assets\LICENSE*` が入ります。
+
+* インストールされていないターゲットがあるとエラーになります。片方だけ作る場合は `-Targets i686-pc-windows-msvc` のように指定します。
+* `-Publish -NotesFile <リリースノート.md>` を付けると、`master` に未コミットの変更がないこと・タグが未作成であることを確認したうえで、タグ `v<バージョン>` を作成して `master` とタグを push し、`gh release create` で GitHub Release を公開します。
+
 ## 管理者権限での自動起動について（任意）
 
 Windowsの仕様（UIPI）により、非管理者権限で動いているフック処理は、管理者権限で開いているウィンドウ（管理者権限のターミナル等）にフォーカスがある間、キー入力を受け取ることができません。

@@ -17,9 +17,14 @@ Run this script once from an elevated PowerShell prompt:
 
 $ErrorActionPreference = "Stop"
 
-$exePath = Join-Path $PSScriptRoot "..\target\release\wappsw.exe"
-if (-not (Test-Path $exePath)) {
-    Write-Error "Release build not found at $exePath -- run 'cargo build --release' first."
+# Next to setup\ in a release zip; under target\release in a source checkout.
+$candidates = @(
+    (Join-Path $PSScriptRoot "..\wappsw.exe"),
+    (Join-Path $PSScriptRoot "..\target\release\wappsw.exe")
+)
+$exePath = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $exePath) {
+    Write-Error "wappsw.exe not found at $($candidates -join ' or ') -- in a source checkout, run 'cargo build --release' first."
     exit 1
 }
 $exePath = (Resolve-Path $exePath).Path

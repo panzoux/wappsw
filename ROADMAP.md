@@ -445,33 +445,28 @@ recurring silently — note its 64-bit half is *still unverified*, since only th
 `i686` toolchain is installed on this machine. Once 📝 E1 exists, the same
 workflow runs `cargo test`.
 
-**Packaging.** Releases are currently assembled by hand into `/dist`, which is
-gitignored (`9d7b204`). Nothing in the repo describes that process — there is
-no packaging script under `scripts\` or `setup\`, so the archive's contents,
-layout and naming live only on your machine. That is the part CI should
-*replace* rather than sit beside: a release workflow that builds both targets
-and produces the archive means the recipe becomes reviewable, reproducible by
-anyone, and impossible to get subtly wrong at 1am.
+**Packaging.** v0.1.0 was assembled by hand into the gitignored `/dist`. The
+recipe is now written down as `scripts\release.ps1`, matching that release's
+layout: one flat zip per target (`wappsw-v<ver>-x86.zip` /
+`wappsw-v<ver>-x86_64.zip`, no top-level folder) holding `wappsw.exe`,
+`README.md`, `LICENSE`, `setup\install-task.ps1` and the `assets\LICENSE*`
+files. Two things v0.1.0 got wrong are fixed on the way: the `assets\LICENSE*`
+files (a redistribution requirement for the BSD-licensed Migemo dictionary)
+were missing, and the shipped `install-task.ps1` only looked for
+`target\release\wappsw.exe`, so it could not work from the zip. `-Publish`
+tags, pushes and runs `gh release create`.
 
-The migration is mechanical but needs your knowledge first, since none of it
-can be read off the repo:
+What remains for CI is to run that same script from a workflow instead of this
+machine:
 
-- **What goes in the archive.** `wappsw.exe` obviously; presumably also
-  `README.md`, `LICENSE`, and the `assets\LICENSE*` files, which are a
-  redistribution requirement for the BSD-licensed Migemo dictionary rather than
-  a nicety. `setup\install-task.ps1` is useful to ship. `scripts\quit.bat` no
-  longer exists — deleted with item 1.
-- **Naming and layout.** Per-target names (`wappsw-0.1.0-i686.zip` /
-  `-x86_64.zip`), and whether the archive has a top-level folder.
 - **Which targets are official.** Both, or 32-bit only — a single `i686` binary
   runs on 64-bit Windows through WOW64 and halves the release matrix, at the
-  cost of a WOW64 process talking to 64-bit windows.
-- **Trigger.** Tag-driven (`v0.1.0` pushes a GitHub Release) versus manual
+  cost of a WOW64 process talking to 64-bit windows. Only `i686` is installed
+  here, so a two-target release currently can't be built on this machine.
+- **Trigger.** Tag-driven (`v<ver>` pushes a GitHub Release) versus manual
   dispatch. Tag-driven is the point of the exercise.
 
-Worth writing the current manual steps down first, even informally — that
-document *is* the workflow, and it has value on its own if CI slips.
-**Effort.** M, once the packaging recipe is written down.
+**Effort.** S-M now that the recipe is a script.
 
 ### 📝 E4 — `wappsw.exe --quit`
 
